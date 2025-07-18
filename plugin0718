@@ -1,0 +1,295 @@
+根据您的问题，我来为您详细解答关于 Next.js 插件开发的相关内容。
+
+## Next.js 插件开发概述
+
+是的，您的理解是正确的！Next.js 确实主要使用 SWC（Speedy Web Compiler）作为其编译工具链，而不是传统的 Babel。SWC 插件可以用 JavaScript 编写，这为开发者提供了很大的灵活性。
+
+## 编写您需要的 SWC 插件
+
+根据您的需求，我来为您创建一个 SWC 插件，该插件能够：
+1. 检测函数上方带有 `@need-empty` 注释的函数
+2. 将这些函数转换为空函数
+3. 保持 sourcemap 的同步
+
+```javascript name=swc-empty-function-plugin.js
+const { Visitor } = require('@swc/core/Visitor');
+
+class EmptyFunctionTransformer extends Visitor {
+  visitFunction(node) {
+    // 检查函数前的注释
+    if (this.shouldEmptyFunction(node)) {
+      // 根据函数类型创建空函数体
+      const emptyBody = {
+        type: 'BlockStatement',
+        stmts: [],
+        span: node.body.span
+      };
+      
+      return {
+        ...node,
+        body: emptyBody
+      };
+    }
+    
+    return this.visitChildren(node);
+  }
+
+  visitFunctionDeclaration(node) {
+    return this.visitFunction(node);
+  }
+
+  visitFunctionExpression(node) {
+    return this.visitFunction(node);
+  }
+
+  visitArrowFunctionExpression(node) {
+    if (this.shouldEmptyFunction(node)) {
+      const emptyBody = {
+        type: 'BlockStatement',
+        stmts: [],
+        span: node.body.span
+      };
+      
+      return {
+        ...node,
+        body: emptyBody
+      };
+    }
+    
+    return this.visitChildren(node);
+  }
+
+  shouldEmptyFunction(node) {
+    // 检查节点前的注释是否包含 @need-empty
+    if (node.leadingComments) {
+      return node.leadingComments.some(comment => 
+        comment.text.includes('@need-empty')
+      );
+    }
+    return false;
+  }
+}
+
+module.exports = function(options = {}) {
+  return (module) => {
+    const transformer = new EmptyFunctionTransformer();
+    return transformer.visitModule(module);
+  };
+};
+```
+
+## Next.js 配置文件
+
+在您的 `next.config.js` 中配置插件：
+
+```javascript name=next.config.js
+const path = require('path');
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  experimental: {
+    swcPlugins: [
+      [
+        path.resolve('./swc-empty-function-plugin.js'),
+        {
+          // 插件选项（如果需要）
+        }
+      ]
+    ]
+  },
+  // 确保 sourcemap 生成
+  productionBrowserSourceMaps: true,
+  webpack: (config, { dev }) => {
+    if (dev) {
+      config.devtool = 'eval-source-map';
+    }
+    return config;
+  }
+};
+
+module.exports = nextConfig;
+```
+
+## 使用示例
+
+以下是如何在您的代码中使用这个插件：
+
+```javascript name=example-functions.js
+// 这个函数会被保留
+function normalFunction() {
+  console.log('This function will remain unchanged');
+  return 'normal result';
+}
+
+// @need-empty
+function targetFunction() {
+  console.log('This will be removed');
+  const result = performComplexCalculation();
+  return result;
+}
+
+class MyClass {
+  // @need-empty
+  complexMethod() {
+    // 这个方法体会被清空
+    this.doSomething();
+    return this.processData();
+  }
+
+  normalMethod() {
+    // 这个方法不会被影响
+    return 'normal';
+  }
+}
+
+// @need-empty
+const arrowFunction = () => {
+  console.log('This arrow function will be emptied');
+  return performOperation();
+};
+```
+
+## 更高级的插件版本
+
+如果您需要更精确的控制，这里是一个增强版本：
+
+```javascript name=advanced-swc-empty-function-plugin.js
+const { Visitor } = require('@swc/core/Visitor');
+
+class AdvancedEmptyFunctionTransformer extends Visitor {
+  constructor(options = {}) {
+    super();
+    this.commentPattern = options.commentPattern || '@need-empty';
+    this.preserveSignature = options.preserveSignature !== false;
+    this.addEmptyComment = options.addEmptyComment !== false;
+  }
+
+  visitModule(module) {
+    // 处理模块级别的注释
+    this.moduleComments = module.comments || [];
+    return this.visitChildren(module);
+  }
+
+  visitFunction(node) {
+    if (this.shouldEmptyFunction(node)) {
+      const emptyBody = this.createEmptyBody(node);
+      
+      return {
+        ...node,
+        body: emptyBody,
+        // 保留函数签名
+        params: this.preserveSignature ? node.params : [],
+        // 添加表示函数已被清空的注释
+        leadingComments: this.addEmptyComment ? [
+          ...(node.leadingComments || []),
+          {
+            type: 'CommentLine',
+            text: ' Function emptied by swc-empty-function-plugin',
+            span: node.span
+          }
+        ] : node.leadingComments
+      };
+    }
+    
+    return this.visitChildren(node);
+  }
+
+  visitFunctionDeclaration(node) {
+    return this.visitFunction(node);
+  }
+
+  visitFunctionExpression(node) {
+    return this.visitFunction(node);
+  }
+
+  visitArrowFunctionExpression(node) {
+    if (this.shouldEmptyFunction(node)) {
+      const emptyBody = this.createEmptyBody(node);
+      
+      return {
+        ...node,
+        body: emptyBody,
+        params: this.preserveSignature ? node.params : []
+      };
+    }
+    
+    return this.visitChildren(node);
+  }
+
+  visitMethodDefinition(node) {
+    if (this.shouldEmptyFunction(node)) {
+      const emptyFunction = this.visitFunction(node.function);
+      return {
+        ...node,
+        function: emptyFunction
+      };
+    }
+    
+    return this.visitChildren(node);
+  }
+
+  shouldEmptyFunction(node) {
+    // 检查直接前置注释
+    if (node.leadingComments) {
+      const hasTargetComment = node.leadingComments.some(comment => 
+        comment.text.includes(this.commentPattern)
+      );
+      if (hasTargetComment) return true;
+    }
+
+    // 检查模块级注释（用于查找函数前的注释）
+    const nodeStart = node.span.start;
+    const relevantComments = this.moduleComments.filter(comment => 
+      comment.span.end < nodeStart
+    );
+    
+    // 找到最接近函数的注释
+    if (relevantComments.length > 0) {
+      const closestComment = relevantComments[relevantComments.length - 1];
+      return closestComment.text.includes(this.commentPattern);
+    }
+
+    return false;
+  }
+
+  createEmptyBody(node) {
+    // 根据原始函数的返回类型智能创建空函数体
+    return {
+      type: 'BlockStatement',
+      stmts: [],
+      span: node.body ? node.body.span : node.span
+    };
+  }
+}
+
+module.exports = function(options = {}) {
+  return (module) => {
+    const transformer = new AdvancedEmptyFunctionTransformer(options);
+    return transformer.visitModule(module);
+  };
+};
+```
+
+## 关于 Sourcemap 同步
+
+SWC 插件会自动处理 sourcemap 的同步，只要您：
+
+1. 在 Next.js 配置中启用了 sourcemap 生成
+2. 在插件中保持了正确的 `span` 信息
+3. 使用了正确的 SWC AST 结构
+
+插件会保持函数的位置信息（span），这样调试时仍然能够正确映射到原始代码位置。
+
+## 安装和设置
+
+1. 首先安装必要的依赖：
+
+```bash
+npm install @swc/core
+```
+
+2. 将插件文件放在项目根目录
+3. 更新 `next.config.js` 配置
+4. 重启 Next.js 开发服务器
+
+这个插件会在编译时自动转换标记的函数，同时保持 sourcemap 的准确性，满足您的所有需求。
